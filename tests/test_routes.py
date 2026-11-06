@@ -86,6 +86,25 @@ class TestAccountService(TestCase):
         data = resp.get_json()
         self.assertEqual(data["status"], "OK")
 
+    def test_security_headers(self):
+        """It should include the security headers configured by Talisman"""
+        response = self.client.get("/health")
+        self.assertEqual(response.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(response.headers.get("X-Frame-Options"), "SAMEORIGIN")
+        self.assertIn("Content-Security-Policy", response.headers)
+
+    def test_cors_preflight(self):
+        """It should allow a browser client to make a cross-origin request"""
+        response = self.client.options(
+            BASE_URL,
+            headers={
+                "Origin": "https://example.com",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.headers.get("Access-Control-Allow-Origin"), "https://example.com")
+
     def test_create_account(self):
         """It should Create a new Account"""
         account = AccountFactory()
@@ -123,4 +142,59 @@ class TestAccountService(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_415_UNSUPPORTED_MEDIA_TYPE)
 
-    # ADD YOUR TEST CASES HERE ...
+    def test_list_accounts(self):
+        """It should list all Accounts"""
+        self.assertEqual(self.client.get(BASE_URL).get_json(), [])
+        self._create_accounts(3)
+        response = self.client.get(BASE_URL)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.get_json()), 3)
+
+    def test_read_account(self):
+        """It should read an Account by id"""
+        account = self._create_accounts(1)[0]
+        response = self.client.get(f"{BASE_URL}/{account.id}")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.get_json()["id"], account.id)
+        self.assertEqual(response.get_json()["name"], account.name)
+
+    def test_read_account_not_found(self):
+        """It should return 404 for an unknown Account"""
+        response = self.client.get(f"{BASE_URL}/999999")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_update_account(self):
+        """It should update an Account and preserve its id"""
+        account = self._create_accounts(1)[0]
+        data = account.serialize()
+        data["address"] = "Updated address"
+        response = self.client.put(
+            f"{BASE_URL}/{account.id}", json=data, content_type="application/json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.get_json()["id"], account.id)
+        self.assertEqual(response.get_json()["address"], "Updated address")
+
+    def test_update_account_not_found(self):
+        """It should return 404 when updating an unknown Account"""
+        data = AccountFactory().serialize()
+        response = self.client.put(f"{BASE_URL}/999999", json=data)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_delete_account(self):
+        """It should delete an Account and return an empty 204 response"""
+        account = self._create_accounts(1)[0]
+        before_count = len(self.client.get(BASE_URL).get_json())
+        response = self.client.delete(f"{BASE_URL}/{account.id}")
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(response.data, b"")
+        self.assertEqual(len(self.client.get(BASE_URL).get_json()), before_count - 1)
+        self.assertEqual(
+            self.client.get(f"{BASE_URL}/{account.id}").status_code,
+            status.HTTP_404_NOT_FOUND,
+        )
+
+    def test_delete_account_not_found(self):
+        """It should return 404 when deleting an unknown Account"""
+        response = self.client.delete(f"{BASE_URL}/999999")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
